@@ -1,199 +1,166 @@
-# Import des bibliothèques nécessaires
-import argparse
-import csv
 import time
-from datetime import datetime
+import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import argparse
+import re
 
-# Configuration et initialisation du navigateur Chrome avec Selenium
-def setup_driver():
-    chrome_options = Options() 
-    chrome_options.add_argument("--no-sandbox")  # Nécessaire pour certains environnements Linux
-    chrome_options.add_argument("--disable-dev-shm-usage")  # Évite les problèmes de mémoire partagée
-    service = Service(executable_path="C:/Users/amino/OneDrive/Bureau/M1/TP_02/chromedriver.exe")
-    return webdriver.Chrome(service=service, options=chrome_options)
-
-# Lecture et définition des arguments de la ligne de commande
 def parse_arguments():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--max_results", type=int, default=10)  # Nombre max de médecins à extraire
-    parser.add_argument("--start_date", type=str, required=True)  # Date de début (non utilisée dans ce code)
-    parser.add_argument("--end_date", type=str, required=True)  # Date de fin (non utilisée dans ce code)
-    parser.add_argument("--query", type=str, required=True)  # Spécialité recherchée (ex: dermatologue)
-    parser.add_argument("--assurance", choices=["secteur 1", "secteur 2", "non conventionné"], default=None)
-    parser.add_argument("--consultation", choices=["visio", "sur place"], default=None)
-    parser.add_argument("--price_min", type=float, default=0.0)  # Prix minimum
-    parser.add_argument("--price_max", type=float, default=1000.0)  # Prix maximum
-    parser.add_argument("--location", type=str, required=True)  # Ville ou localisation
+    """
+    Analyse les arguments passés en ligne de commande.
+    """
+    parser = argparse.ArgumentParser(description='Scraping Doctolib avec Selenium')
+    parser.add_argument('--max_results', type=int, default=10, help='Nombre max de résultats')
+    parser.add_argument('--start_date', required=True, help='Date début JJ/MM/AAAA')
+    parser.add_argument('--end_date', required=True, help='Date fin JJ/MM/AAAA')
+    parser.add_argument('--speciality', required=True, help='Spécialité médicale recherchée (ex: dermatologue)')
+    parser.add_argument('--insurance', required=True, choices=['secteur 1', 'secteur 2', 'non conventionné'], help='Type d’assurance accepté')
+    parser.add_argument('--consultation', required=True, choices=['video', 'sur place'], help='Type de consultation')
+    parser.add_argument('--price_min', type=int, default=0, help='Prix minimum')
+    parser.add_argument('--price_max', type=int, default=999, help='Prix maximum')
+    parser.add_argument('--address_keyword', required=True, help='Mot-clé pour la localisation')
     return parser.parse_args()
 
-# Fonction pour effectuer la recherche sur Doctolib avec les critères utilisateur
-def search_doctolib(driver, query, location):
-    driver.get("https://www.doctolib.fr/")
-    wait = WebDriverWait(driver, 20)  # Attente explicite
+def init_chrome_driver():
+    """
+    Initialise le navigateur Chrome avec les bons paramètres.
+    """
+    chrome_service = Service(ChromeDriverManager().install())
+    chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    browser = webdriver.Chrome(service=chrome_service, options=chrome_options)
+    browser.maximize_window()
+    return browser
 
+def launch_doctolib_search(browser, user_args):
+    """
+    Lance la recherche sur Doctolib selon les critères définis.
+    """
+    browser.get('https://www.doctolib.fr')
+    wait = WebDriverWait(browser, 15)
+
+    # Accepter les cookies si présent
     try:
-        # Champ de recherche de spécialité
-        search_input = wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "input.searchbar-input.searchbar-query-input"))
-        )
-        search_input.clear()
-        search_input.send_keys(query)
-        search_input.send_keys(Keys.TAB)
-        time.sleep(1)
+        accept_cookies_button = wait.until(EC.element_to_be_clickable((By.ID, 'didomi-notice-agree-button')))
+        accept_cookies_button.click()
+    except:
+        pass  # Pas de popup de cookies
 
-        # Champ de recherche de localisation
-        location_input = wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "input.searchbar-place-input"))
-        )
-        location_input.clear()
-        location_input.send_keys(location)
-        location_input.send_keys(Keys.RETURN)
-        time.sleep(3)
+    # Entrer la spécialité
+    speciality_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input.searchbar-query-input')))
+    speciality_input.send_keys(user_args.speciality)
+    time.sleep(2)
+    speciality_input.send_keys(Keys.ARROW_DOWN, Keys.ENTER)
 
-        print("[DEBUG] En attente de l'élément des résultats...")
-        wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.dl-card-content")))
+    # Entrer l'adresse
+    address_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[placeholder="Où ?"]')))
+    address_input.clear()
+    address_input.send_keys(user_args.address_keyword)
+    time.sleep(2)
+    address_input.send_keys(Keys.ARROW_DOWN, Keys.ENTER)
+    address_input.send_keys(Keys.RETURN)
 
-    except Exception as e:
-        print(f"[ERROR] Erreur lors de la recherche : {e}")
+    # Attente du chargement des cartes de résultats
+    try:
+        wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'div.dl-card')))
+    except:
+        wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, 'dl-search-result-presentation')))
 
-# Fonction principale pour extraire les informations depuis les cartes de résultats
-def extract_results(driver, max_results):
-    results = []
+    time.sleep(2)
+    browser.execute_script("window.scrollBy(0, 600);")
+    time.sleep(2)
 
-    # Récupère les cartes de médecins affichées
-    cards = driver.find_elements(By.CSS_SELECTOR, "div.dl-card-content")[:max_results]
-    print(f"[DEBUG] Nombre de cartes trouvées : {len(cards)}")
+def extract_doctor_cards(browser, max_results):
+    """
+    Extrait les données des cartes de médecins.
+    """
+    time.sleep(2)
+    doctor_cards = browser.find_elements(By.CSS_SELECTOR, "div.dl-card")[:max_results]
+    search_results = []
 
-    for card in cards:
-        print(card.text)
-
-        # Tente de cliquer sur le bouton/titre du médecin pour voir les détails
-        boutton_element = card.find_element(By.CSS_SELECTOR, "h2") 
-        boutton_element.click()
-        time.sleep(5)
-
-        # Extraction du nom
+    for card in doctor_cards:
         try:
-            name = boutton_element.find_element(By.CSS_SELECTOR, ".profile-name-with-title").text
-            print(f"Nom: {name}")
-        except Exception as e:
-            print(f"Erreur lors de l'extraction du nom: {e}")
-            name = "Inconnu"
+            full_name = card.find_element(By.CSS_SELECTOR, "h2").text.strip()
+        except:
+            continue  # Carte sans nom valide, on ignore
 
-        # Extraction des disponibilités
         try:
-            availability_block = card.find_element(By.CSS_SELECTOR, ".availabilities-days")
-            availability_name = availability_block.find_element(By.CSS_SELECTOR, ".availabilities-day-name").text
-            availability_date = availability_block.find_element(By.CSS_SELECTOR, ".availabilities-day-date").text
-            availability_time = availability_block.find_element(By.CSS_SELECTOR, ".Tappable-inactive.availabilities-slot").text
-        except Exception as e:
-            print(f"Erreur lors de l'extraction de la disponibilité: {e}")
-            availability_name = availability_date = availability_time = "Inconnue"
+            paragraph_elements = card.find_elements(By.CSS_SELECTOR, 'p[data-design-system-component="Paragraph"]')
+            paragraph_texts = [p.text.strip() for p in paragraph_elements]
 
-        # Extraction de l'adresse depuis la page de détail
-        try: 
-            adresse_block = boutton_element.find_element(By.CSS_SELECTOR, ".dl-profile-pratice-name").text
-            lines = adresse_block.split(",")
-            street = lines[0].strip()
-            postal_code = lines[1].split(" ")[0].strip()
-            city = " ".join(lines[1].split(" ")[1:]).strip()
-        except Exception as e:
-            print(f"Erreur lors de l'extraction de l'adresse: {e}")
-            street = postal_code = city = "Inconnus"
+            # Détection spécialité
+            speciality = next((t for t in paragraph_texts if any(m in t.lower() for m in ['dermatologue', 'ophtalmologue', 'allergologue'])), "Centre de santé")
 
-        # Extraction de l'information sur l'assurance
+            # Adresse : rue
+            address_line = next((t for t in paragraph_texts if re.search(r'\d+.*(rue|avenue|boulevard|place|chemin)', t.lower())), "NA")
+
+            # Code postal et ville
+            postal_city = next((t for t in paragraph_texts if re.match(r'\d{5}\s', t)), "NA NA")
+            postal_parts = postal_city.split(" ", 1)
+            postal_code = postal_parts[0]
+            city = postal_parts[1] if len(postal_parts) > 1 else "NA"
+
+            # Conventionnement / secteur
+            raw_insurance_text = next((t for t in paragraph_texts if 'conventionné' in t.lower()), "NA")
+            is_conventionne = "Oui" if "conventionné" in raw_insurance_text.lower() else "Non"
+
+            if "secteur 1" in raw_insurance_text.lower():
+                insurance_sector = "1"
+            elif "secteur 2" in raw_insurance_text.lower():
+                insurance_sector = "2"
+            else:
+                insurance_sector = "Non précisé"
+
+        except:
+            speciality, address_line, postal_code, city, is_conventionne, insurance_sector = "NA", "NA", "NA", "NA", "NA", "NA"
+
+        # Type de consultation
+        consultation_type = "video" if card.find_elements(By.CSS_SELECTOR, '[data-test-id="telehealth-icon"]') else "sur place"
+
+        # Prochaine disponibilité
         try:
-            assurance = card.find_element(By.CSS_SELECTOR, ".t-sector").text
-        except Exception as e:
-            print(f"Erreur lors de l'extraction de l'assurance: {e}")
-            assurance = "Inconnu"
+            availability_container = card.find_element(By.CSS_SELECTOR, '[data-test-id="availabilities-container"]')
+            availability_text = availability_container.text.strip().replace("\n", " ")
+            date_match = re.search(r"(?:[Ll]e\s)?(\d{1,2}\s\w+\s\d{4})", availability_text)
+            next_availability = date_match.group(1) if date_match else availability_text[:50]
+        except:
+            next_availability = "Non précisée"
 
-        # Extraction du prix
-        try:
-            price_block = card.find_element(By.CSS_SELECTOR, ".dl-text.dl-text-body.dl-text-s.dl-text-neutral-130") 
-            price = card.find_element(By.CSS_SELECTOR, ".t-fee").text.replace("€", "").strip()
-        except Exception as e:
-            print(f"Erreur lors de l'extraction du prix: {e}")
-            price = "Inconnu"
-
-        # (Redondant) Ré-extraction de l'adresse depuis le résumé de la carte
-        try:
-            address_block = card.find_element(By.CSS_SELECTOR, ".dl-text.dl-text-body.dl-text-s.dl-text-neutral-130").text
-            lines = address_block.split("\n")
-            street = lines[0]
-            postal_code = lines[1].split(" ")[0]
-            city = " ".join(lines[1].split(" ")[1:])
-        except Exception as e:
-            print(f"Erreur lors de l'extraction de l'adresse: {e}")
-            street = postal_code = city = "Inconnus"
-
-        # Construction de l’objet résultat
-        results.append({
-            "Nom": name,
-            "Disponibilité": f"{availability_name} {availability_date} {availability_time}",
-            "Consultation": "visio ou sur place",  # À remplacer par la vraie info si disponible
-            "Assurance": assurance,
-            "Prix (€)": price,
-            "Rue": street,
-            "Code Postal": postal_code,
+        # Construction de la ligne de résultat
+        search_results.append({
+            "Nom complet": full_name,
+            "Spécialité": speciality,
+            "Consultation": consultation_type,
+            "Conventionné": is_conventionne,
+            "Secteur": insurance_sector,
+            "Prochaine dispo": next_availability,
+            "Rue": address_line,
+            "Code postal": postal_code,
             "Ville": city
         })
 
-        # Retour à la page précédente
-        driver.back()
+    return pd.DataFrame(search_results)
 
-    return results
-
-# Sauvegarde des résultats dans un fichier CSV
-def save_to_csv(results):
-    with open("medecins.csv", "w", newline="", encoding="utf-8") as csvfile:
-        fieldnames = ["Nom", "Disponibilité", "Consultation", "Assurance", "Prix (€)", "Rue", "Code Postal", "Ville"]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for res in results:
-            writer.writerow(res)
-            print("je suis la")
-            print(f"[DEBUG] Écriture dans le CSV : {res}")
-
-# Fonction principale de contrôle du programme
 def main():
-    args = parse_arguments()  # Récupération des paramètres utilisateur
-    driver = setup_driver()  # Initialisation de Selenium
+    """
+    Point d’entrée principal.
+    """
+    user_args = parse_arguments()
+    browser = init_chrome_driver()
 
     try:
-        search_doctolib(driver, args.query, args.location)
-        scraped = extract_results(driver, args.max_results)
-
-        # Application des filtres demandés par l'utilisateur
-        filtered = []
-        for med in scraped:
-            if args.assurance and args.assurance.lower() not in med["Assurance"].lower():
-                continue
-            if args.consultation and args.consultation not in med["Consultation"].lower():
-                continue
-            try:
-                prix = float(med["Prix (€)"])
-                if not (args.price_min <= prix <= args.price_max):
-                    continue
-            except ValueError:
-                print(f"[ERROR] Prix invalide pour {med['Nom']}: {med['Prix (€)']}")
-
-            filtered.append(med)
-
-        # Sauvegarde finale
-        save_to_csv(filtered)
-        print(f"{len(filtered)} résultats sauvegardés dans 'medecins.csv'")
-
+        launch_doctolib_search(browser, user_args)
+        dataframe = extract_doctor_cards(browser, user_args.max_results)
+        file_name = f'doctolib_{user_args.speciality}_{user_args.address_keyword}.csv'
+        dataframe.to_csv(file_name, index=False, encoding='utf-8-sig')
+        print(f'Fichier CSV sauvegardé : {file_name}')
     finally:
-        driver.quit()  # Fermeture du navigateur
+        browser.quit()
 
-# Point d'entrée du script
 if __name__ == "__main__":
     main()

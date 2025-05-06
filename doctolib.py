@@ -61,6 +61,7 @@ def launch_doctolib_search(browser, user_args):
     address_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[placeholder="Où ?"]')))
     address_input.clear()
     address_input.send_keys(user_args.address_keyword)
+    
     time.sleep(2)
     address_input.send_keys(Keys.ARROW_DOWN, Keys.ENTER)
     address_input.send_keys(Keys.RETURN)
@@ -73,6 +74,7 @@ def launch_doctolib_search(browser, user_args):
 
     time.sleep(2)
     browser.execute_script("window.scrollBy(0, 600);")
+    
     time.sleep(2)
 
 def extract_doctor_cards(browser, max_results):
@@ -102,6 +104,7 @@ def extract_doctor_cards(browser, max_results):
             # Code postal et ville
             postal_city = next((t for t in paragraph_texts if re.match(r'\d{5}\s', t)), "NA NA")
             postal_parts = postal_city.split(" ", 1)
+            
             postal_code = postal_parts[0]
             city = postal_parts[1] if len(postal_parts) > 1 else "NA"
 

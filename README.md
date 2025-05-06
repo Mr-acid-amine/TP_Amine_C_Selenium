@@ -16,4 +16,13 @@ Des **problèmes de sélecteurs CSS** empêchent l’extraction complète de cer
 ## ▶️ Exemple d'exécution
 
 ```bash
-python doctolib.py --query "généraliste" --location "Paris" --start_date "2024-05-01" --end_date "2024-05-31" --max_results 10
+python scraping_doctolib.py `
+  --max_results 10 `
+  --start_date 10/05/2025 `
+  --end_date 15/05/2025 `
+  --speciality ophtalmologue `
+  --insurance "secteur 1" `
+  --consultation "sur place" `
+  --price_min 20 `
+  --price_max 90 `
+  --address_keyword "Bastille Paris"
